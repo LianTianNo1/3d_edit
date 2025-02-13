@@ -1,9 +1,35 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { Upload, Button, message } from 'antd';
-import { UploadOutlined } from '@ant-design/icons';
+import { UploadOutlined, SaveOutlined, ImportOutlined } from '@ant-design/icons';
+import { DragControls } from 'three/examples/jsm/controls/DragControls';
+
+// 工具函数：将 Vector3 转换为普通对象
+const vector3ToObject = (vector) => {
+  return {
+    x: vector.x,
+    y: vector.y,
+    z: vector.z
+  };
+};
+
+// 工具函数：将 Color 转换为十六进制字符串
+const colorToHex = (color) => {
+  return '#' + color.getHexString();
+};
+
+// 工具函数：获取材质信息
+const getMaterialInfo = (material) => {
+  if (!material) return null;
+  return {
+    color: colorToHex(material.color),
+    opacity: material.opacity,
+    transparent: material.transparent,
+    side: material.side
+  };
+};
 
 /**
  * Three.js 场景组件
@@ -21,6 +47,8 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   const modelsRef = useRef([]);
+  const dragControlsRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   // 初始化场景
   useEffect(() => {
@@ -106,6 +134,34 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+    // 创建拖拽控制器
+    const dragControls = new DragControls([], camera, renderer.domElement);
+    dragControlsRef.current = dragControls;
+
+    // 开始拖拽时
+    dragControls.addEventListener('dragstart', (event) => {
+      setIsDragging(true);
+      // 禁用轨道控制器
+      if (controlsRef.current) {
+        controlsRef.current.enabled = false;
+      }
+    });
+
+    // 拖拽过程中
+    dragControls.addEventListener('drag', (event) => {
+      // 限制Y轴移动（可选，如果需要限制在地平面上移动）
+      // event.object.position.y = event.object.userData.initialY || 0;
+    });
+
+    // 结束拖拽时
+    dragControls.addEventListener('dragend', (event) => {
+      setIsDragging(false);
+      // 恢复轨道控制器
+      if (controlsRef.current) {
+        controlsRef.current.enabled = true;
+      }
+    });
+
     // 处理窗口大小变化
     const handleResize = () => {
       if (!containerRef.current) return;
@@ -125,6 +181,8 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
 
     // 处理模型选中
     const handleModelSelect = (event) => {
+      if (isDragging) return; // 如果正在拖拽，不处理选中
+
       // 获取容器矩形
       const rect = containerRef.current.getBoundingClientRect();
       // 计算鼠标位置
@@ -216,10 +274,87 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     };
   }, [onModelSelect]);
 
-  /**
-   * 处理模型加载
-   * @param {Event} event - 文件上传事件
-   */
+  // 监听选中模型变化
+  useEffect(() => {
+    if (!dragControlsRef.current) return;
+
+    if (selectedModel) {
+      // 更新可拖拽对象
+      dragControlsRef.current.setObjects([selectedModel]);
+    } else {
+      // 清空可拖拽对象
+      dragControlsRef.current.setObjects([]);
+      // 确保轨道控制器被启用
+      if (controlsRef.current) {
+        controlsRef.current.enabled = true;
+      }
+    }
+  }, [selectedModel]);
+
+  // 导出场景为JSON
+  const exportSceneToJSON = () => {
+    if (!sceneRef.current || !cameraRef.current) {
+      message.error('场景未初始化');
+      return;
+    }
+
+    const sceneData = {
+      sceneInfo: {
+        version: '1.0.0',
+        name: 'My 3D Scene',
+        createTime: new Date().toISOString(),
+        updateTime: new Date().toISOString()
+      },
+
+      // 相机信息
+      camera: {
+        position: vector3ToObject(cameraRef.current.position),
+        rotation: vector3ToObject(cameraRef.current.rotation),
+        fov: cameraRef.current.fov,
+        near: cameraRef.current.near,
+        far: cameraRef.current.far
+      },
+
+      // 灯光信息
+      lights: sceneRef.current.children
+        .filter(child => child.isLight)
+        .map(light => ({
+          type: light.type,
+          color: colorToHex(light.color),
+          intensity: light.intensity,
+          ...(light.position && { position: vector3ToObject(light.position) }),
+          ...(light.target && { target: vector3ToObject(light.target.position) })
+        })),
+
+      // 模型信息
+      models: modelsRef.current.map(model => ({
+        id: model.uuid,
+        name: model.name,
+        type: model.type,
+        filePath: model.userData.filePath || '',  // 保存模型文件路径
+        position: vector3ToObject(model.position),
+        rotation: vector3ToObject(model.rotation),
+        scale: vector3ToObject(model.scale),
+        visible: model.visible,
+        material: model.material ? getMaterialInfo(model.material) : null
+      }))
+    };
+
+    // 创建并下载JSON文件
+    const blob = new Blob([JSON.stringify(sceneData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'scene.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    message.success('场景已导出');
+  };
+
+  // 修改handleFileUpload方法，添加文件路径记录
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) {
@@ -320,43 +455,23 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
       console.log('Added object to scene. Scene children count:', sceneRef.current.children.length);
       modelsRef.current.push(object);
 
-      // 调整相机位置以更好地查看模型
-      const cameraDistance = targetSize * 2;
-      if (cameraRef.current) {
-        cameraRef.current.position.set(
-          cameraDistance,
-          cameraDistance * 0.8,
-          cameraDistance
-        );
-        cameraRef.current.lookAt(0, targetSize / 4, 0);
-      }
-
-      // 更新控制器目标点
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, targetSize / 4, 0);
-        controlsRef.current.update();
-      }
-
       // 更新模型列表时过滤掉辅助对象和光源
       onModelsChange(prevModels => {
-        // 只保留实际的模型对象
         const newModels = [...prevModels, object].filter(model =>
-          model.type === 'Group' || // OBJ 加载的模型通常是 Group
-          (model.isMesh && !model.isHelper) // 或者是网格但不是辅助对象
+          model.type === 'Group' ||
+          (model.isMesh && !model.isHelper)
         );
-        console.log('Updated models list. New count:', newModels.length);
         return newModels;
       });
 
+      // 保存文件路径信息
+      object.userData.filePath = file.path || file.webkitRelativePath || file.name;
+
     } catch (error) {
       console.error('Error loading model:', error);
-      // 输出更详细的错误信息
-      if (error.stack) {
-        console.error('Error stack:', error.stack);
-      }
+      message.error('模型加载失败');
     } finally {
       URL.revokeObjectURL(objectUrl);
-      console.log('Cleaned up object URL');
     }
   };
 
@@ -377,31 +492,199 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     }
   }, []);
 
+  // 导入场景
+  const importSceneFromJSON = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const sceneData = JSON.parse(e.target.result);
+
+          // 验证场景数据版本
+          if (!sceneData.sceneInfo || sceneData.sceneInfo.version !== '1.0.0') {
+            message.error('不支持的场景文件版本');
+            return;
+          }
+
+          // 清空当前场景中的模型
+          modelsRef.current.forEach(model => {
+            sceneRef.current.remove(model);
+          });
+          modelsRef.current = [];
+
+          // 恢复相机位置
+          if (sceneData.camera) {
+            const { position, rotation, fov, near, far } = sceneData.camera;
+            cameraRef.current.position.set(position.x, position.y, position.z);
+            cameraRef.current.rotation.set(rotation.x, rotation.y, rotation.z);
+            cameraRef.current.fov = fov;
+            cameraRef.current.near = near;
+            cameraRef.current.far = far;
+            cameraRef.current.updateProjectionMatrix();
+          }
+
+          // 恢复灯光
+          sceneRef.current.children
+            .filter(child => child.isLight)
+            .forEach(light => sceneRef.current.remove(light));
+
+          sceneData.lights.forEach(lightData => {
+            let light;
+            switch (lightData.type) {
+              case 'AmbientLight':
+                light = new THREE.AmbientLight(lightData.color, lightData.intensity);
+                break;
+              case 'DirectionalLight':
+                light = new THREE.DirectionalLight(lightData.color, lightData.intensity);
+                if (lightData.position) {
+                  light.position.set(
+                    lightData.position.x,
+                    lightData.position.y,
+                    lightData.position.z
+                  );
+                }
+                if (lightData.target) {
+                  light.target.position.set(
+                    lightData.target.x,
+                    lightData.target.y,
+                    lightData.target.z
+                  );
+                }
+                break;
+              // 可以添加其他类型的灯光支持
+            }
+            if (light) sceneRef.current.add(light);
+          });
+
+          // 加载模型
+          const loader = new OBJLoader();
+          for (const modelData of sceneData.models) {
+            try {
+              // 这里使用本地文件路径加载模型
+              const object = await loader.loadAsync(modelData.filePath);
+
+              // 恢复模型变换
+              object.position.set(
+                modelData.position.x,
+                modelData.position.y,
+                modelData.position.z
+              );
+              object.rotation.set(
+                modelData.rotation.x,
+                modelData.rotation.y,
+                modelData.rotation.z
+              );
+              object.scale.set(
+                modelData.scale.x,
+                modelData.scale.y,
+                modelData.scale.z
+              );
+
+              // 恢复材质
+              if (modelData.material) {
+                object.traverse((child) => {
+                  if (child.isMesh) {
+                    child.material = new THREE.MeshPhongMaterial({
+                      color: modelData.material.color,
+                      opacity: modelData.material.opacity,
+                      transparent: modelData.material.transparent,
+                      side: modelData.material.side
+                    });
+                  }
+                });
+              }
+
+              // 保存文件路径
+              object.userData.filePath = modelData.filePath;
+
+              // 添加到场景
+              sceneRef.current.add(object);
+              modelsRef.current.push(object);
+            } catch (error) {
+              console.error(`Error loading model ${modelData.name}:`, error);
+              message.warning(`模型 ${modelData.name} 加载失败`);
+            }
+          }
+
+          // 更新模型列表
+          onModelsChange(modelsRef.current);
+          message.success('场景导入成功');
+        } catch (error) {
+          console.error('Error parsing scene data:', error);
+          message.error('场景文件格式错误');
+        }
+      };
+      reader.readAsText(file);
+    } catch (error) {
+      console.error('Error reading scene file:', error);
+      message.error('读取场景文件失败');
+    }
+  };
+
   return (
     <div
       ref={containerRef}
       style={{ width: '100%', height: '100%', position: 'relative' }}
     >
-      <Upload
-        accept=".obj"
-        showUploadList={false}
-        beforeUpload={(file) => {
-          handleFileUpload({ target: { files: [file] } });
-          return false; // 阻止自动上传
-        }}
-      >
+      <div style={{
+        position: 'absolute',
+        top: 10,
+        left: 10,
+        zIndex: 1000,
+        display: 'flex',
+        gap: '10px'
+      }}>
+        <Upload
+          accept=".obj"
+          showUploadList={false}
+          beforeUpload={(file) => {
+            handleFileUpload({ target: { files: [file] } });
+            return false;
+          }}
+        >
+          <Button icon={<UploadOutlined />}>
+            导入模型
+          </Button>
+        </Upload>
         <Button
-          icon={<UploadOutlined />}
+          icon={<SaveOutlined />}
+          onClick={exportSceneToJSON}
+        >
+          导出场景
+        </Button>
+        <Upload
+          accept=".json"
+          showUploadList={false}
+          beforeUpload={(file) => {
+            importSceneFromJSON({ target: { files: [file] } });
+            return false;
+          }}
+        >
+          <Button icon={<ImportOutlined />}>
+            导入场景
+          </Button>
+        </Upload>
+      </div>
+      {/* 添加拖拽提示 */}
+      {selectedModel && (
+        <div
           style={{
             position: 'absolute',
             top: 10,
-            left: 10,
+            right: 10,
+            padding: '8px 12px',
+            background: 'rgba(0,0,0,0.6)',
+            color: 'white',
+            borderRadius: '4px',
             zIndex: 1000
           }}
         >
-          导入模型
-        </Button>
-      </Upload>
+          {isDragging ? '正在拖拽模型...' : '长按模型可拖拽'}
+        </div>
+      )}
     </div>
   );
 };
