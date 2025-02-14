@@ -6,6 +6,9 @@ import { Upload, Button, message } from 'antd';
 import { UploadOutlined, SaveOutlined, ImportOutlined } from '@ant-design/icons';
 import { DragControls } from 'three/examples/jsm/controls/DragControls';
 
+// 服务器配置
+const SERVER_URL = 'http://localhost:921';
+
 // 工具函数：将 Vector3 转换为普通对象
 const vector3ToObject = (vector) => {
   return {
@@ -29,6 +32,43 @@ const getMaterialInfo = (material) => {
     transparent: material.transparent,
     side: material.side
   };
+};
+
+// 修改文件信息处理函数
+const getFileInfo = (serverResponse) => {
+  return {
+    name: serverResponse.filename,
+    size: serverResponse.size,
+    url: serverResponse.url,
+    filename: serverResponse.filename
+  };
+};
+
+// 修改文件上传函数
+const uploadFile = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const response = await fetch(`${SERVER_URL}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error('上传失败');
+    }
+
+    const result = await response.json();
+    if (result.code !== 200) {
+      throw new Error(result.message || '上传失败');
+    }
+
+    return result.data;
+  } catch (error) {
+    console.error('Upload error:', error);
+    throw error;
+  }
 };
 
 /**
@@ -151,6 +191,16 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     dragControls.addEventListener('drag', (event) => {
       // 限制Y轴移动（可选，如果需要限制在地平面上移动）
       // event.object.position.y = event.object.userData.initialY || 0;
+
+      // 通知位置更新
+      if (onModelSelect && event.object) {
+        // 更新选中对象的位置
+        const updatedObject = event.object;
+        // 强制更新选中状态，触发属性面板更新
+        // onModelSelect(null);  // 先取消选中
+        onModelSelect(updatedObject);  // 再重新选中
+        // console.log("看看-updatedObject", updatedObject)
+      }
     });
 
     // 结束拖拽时
@@ -159,6 +209,10 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
       // 恢复轨道控制器
       if (controlsRef.current) {
         controlsRef.current.enabled = true;
+      }
+      // 确保最后一次更新
+      if (onModelSelect && event.object) {
+        onModelSelect(event.object);
       }
     });
 
@@ -297,6 +351,7 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
       message.error('场景未初始化');
       return;
     }
+    console.log("看看-modelsRef", modelsRef.current)
 
     const sceneData = {
       sceneInfo: {
@@ -325,13 +380,15 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
           ...(light.position && { position: vector3ToObject(light.position) }),
           ...(light.target && { target: vector3ToObject(light.target.position) })
         })),
-
       // 模型信息
       models: modelsRef.current.map(model => ({
         id: model.uuid,
         name: model.name,
         type: model.type,
-        filePath: model.userData.filePath || '',  // 保存模型文件路径
+        fileInfo: model.userData.fileInfo || {
+          name: model.name,
+          localStoragePath: `models/${model.uuid}_${model.name}`
+        },
         position: vector3ToObject(model.position),
         rotation: vector3ToObject(model.rotation),
         scale: vector3ToObject(model.scale),
@@ -354,26 +411,21 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     message.success('场景已导出');
   };
 
-  // 修改handleFileUpload方法，添加文件路径记录
+  // 修改handleFileUpload方法
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
-    if (!file) {
-      console.log('No file selected');
-      return;
-    }
-
-    console.log('Starting to load file:', file.name);
-
-    // 创建OBJLoader对象
-    const loader = new OBJLoader();
-    // 创建文件URL
-    const objectUrl = URL.createObjectURL(file);
+    if (!file) return;
 
     try {
-      console.log('Loading model from URL:', objectUrl);
-      // 加载模型
-      const object = await loader.loadAsync(objectUrl);
-      console.log('Raw loaded object:', object);
+      // 上传文件到服务器
+      const uploadResponse = await uploadFile(file);
+      const fileInfo = getFileInfo(uploadResponse);
+
+      // 创建OBJLoader对象
+      const loader = new OBJLoader();
+
+      // 从服务器加载模型
+      const object = await loader.loadAsync(fileInfo.url);
 
       // 检查加载的对象
       if (!object) {
@@ -450,12 +502,14 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
         return;
       }
 
-      // 将模型添加到场景中
+      // 保存文件信息
+      object.userData.fileInfo = fileInfo;
+
+      // 将模型添加到场景
       sceneRef.current.add(object);
-      console.log('Added object to scene. Scene children count:', sceneRef.current.children.length);
       modelsRef.current.push(object);
 
-      // 更新模型列表时过滤掉辅助对象和光源
+      // 更新模型列表
       onModelsChange(prevModels => {
         const newModels = [...prevModels, object].filter(model =>
           model.type === 'Group' ||
@@ -464,14 +518,10 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
         return newModels;
       });
 
-      // 保存文件路径信息
-      object.userData.filePath = file.path || file.webkitRelativePath || file.name;
-
+      message.success('模型导入成功');
     } catch (error) {
       console.error('Error loading model:', error);
-      message.error('模型加载失败');
-    } finally {
-      URL.revokeObjectURL(objectUrl);
+      message.error('模型导入失败');
     }
   };
 
@@ -492,7 +542,7 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     }
   }, []);
 
-  // 导入场景
+  // 修改导入场景方法
   const importSceneFromJSON = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -563,8 +613,13 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
           const loader = new OBJLoader();
           for (const modelData of sceneData.models) {
             try {
-              // 这里使用本地文件路径加载模型
-              const object = await loader.loadAsync(modelData.filePath);
+              // 使用保存的服务器URL加载模型
+              const modelUrl = modelData.fileInfo.url;
+              if (!modelUrl) {
+                throw new Error('模型URL不存在');
+              }
+
+              const object = await loader.loadAsync(modelUrl);
 
               // 恢复模型变换
               object.position.set(
@@ -583,6 +638,9 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
                 modelData.scale.z
               );
 
+              // 保存文件信息
+              object.userData.fileInfo = modelData.fileInfo;
+
               // 恢复材质
               if (modelData.material) {
                 object.traverse((child) => {
@@ -597,15 +655,12 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
                 });
               }
 
-              // 保存文件路径
-              object.userData.filePath = modelData.filePath;
-
               // 添加到场景
               sceneRef.current.add(object);
               modelsRef.current.push(object);
             } catch (error) {
-              console.error(`Error loading model ${modelData.name}:`, error);
-              message.warning(`模型 ${modelData.name} 加载失败`);
+              console.error(`Error loading model ${modelData.fileInfo.name}:`, error);
+              message.warning(`模型 ${modelData.fileInfo.name} 加载失败: ${error.message}`);
             }
           }
 

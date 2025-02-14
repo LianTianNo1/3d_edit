@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Layout } from 'antd';
 import ThreeJSScene from './components/ThreeJSScene';
 import SceneTree from './components/SceneTree';
 import PropertyPanel from './components/PropertyPanel';
 import ErrorBoundary from './components/ErrorBoundary';
-
+import { cloneDeep } from 'lodash';
 const { Sider, Content } = Layout;
 
 const Editor3D = () => {
@@ -17,11 +17,19 @@ const Editor3D = () => {
   const handleModelSelect = (model) => {
     // 只允许选择实际的模型对象
     if (model && (model.type === 'Group' || (model.isMesh && !model.isHelper))) {
+      // console.log("看看-handleModelSelect", model)
+      // // 用 lodash 深拷贝 model
+      // const clonedModel = cloneDeep(model);
+      // setSelectedModel(clonedModel);
       setSelectedModel(model);
     } else {
       setSelectedModel(null);
     }
   };
+
+  useEffect(() => {
+    console.log("看看-sceneModels--0000", selectedModel)
+  }, [selectedModel?.position])
 
   // 处理模型属性更新
   const handleModelUpdate = (type, value) => {
@@ -45,6 +53,7 @@ const Editor3D = () => {
       default:
         break;
     }
+    setSelectedModel(selectedModel);
   };
 
   return (
