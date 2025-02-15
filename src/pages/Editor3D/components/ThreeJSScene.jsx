@@ -77,8 +77,10 @@ const uploadFile = async (file) => {
  * @param {Function} props.onModelSelect - 模型选中回调函数
  * @param {Function} props.onModelsChange - 场景模型列表变化回调函数
  * @param {Object} props.selectedModel - 当前选中的模型对象
+ * @param {Object} props.transformState - 变换状态对象
+ * @param {Function} props.onTransformChange - 变换状态变化回调函数
  */
-const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
+const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel, transformState, onTransformChange }) => {
   const containerRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
@@ -89,6 +91,10 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
   const mouseRef = useRef(new THREE.Vector2());
   const modelsRef = useRef([]);
   const [transformMode, setTransformMode] = useState('translate'); // 'translate', 'rotate', 'scale'
+
+  useEffect(() => {
+    console.log('组件重新渲染')
+  }, [])
 
   // 初始化场景
   useEffect(() => {
@@ -181,15 +187,15 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
       controls.enabled = !event.value;
     });
 
-    // 监听变换事件
-    transformControls.addEventListener('objectChange', () => {
-      if (transformControls.object && onModelSelect) {
-        // 通知属性面板更新
-        onModelSelect(transformControls.object);
+    // 监听变换事件 - 使用 change 而不是 objectChange
+    transformControls.addEventListener('change', () => {
+      if (transformControls.object) {
+        // 只同步变换状态，不触发选中
+        onTransformChange();
       }
     });
 
-    // 添加到场景 - 修改这里
+    // 添加到场景
     scene.add(transformControls.getHelper());
     transformControlsRef.current = transformControls;
 
@@ -286,18 +292,13 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
         transformControls.dispose();
       }
     };
-  }, [onModelSelect]);
+  }, []); // 移除 onModelSelect 依赖
 
   // 监听选中模型变化
   useEffect(() => {
     if (!transformControlsRef.current || !sceneRef.current) return;
 
     if (selectedModel) {
-      // 确保 transformControls 已经被正确添加到场景中
-      const helper = transformControlsRef.current.getHelper();
-      if (!sceneRef.current.children.includes(helper)) {
-        sceneRef.current.add(helper);
-      }
       transformControlsRef.current.attach(selectedModel);
     } else {
       transformControlsRef.current.detach();
@@ -376,7 +377,8 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
           ...(light.position && { position: vector3ToObject(light.position) }),
           ...(light.target && { target: vector3ToObject(light.target.position) })
         })),
-      // 模型信息
+
+      // 模型信息 - 使用 transformState 来获取变换信息
       models: modelsRef.current.map(model => ({
         id: model.uuid,
         name: model.name,

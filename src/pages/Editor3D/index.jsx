@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from 'antd';
 import ThreeJSScene from './components/ThreeJSScene';
 import SceneTree from './components/SceneTree';
@@ -8,52 +8,115 @@ import { cloneDeep } from 'lodash';
 const { Sider, Content } = Layout;
 
 const Editor3D = () => {
-  // 选中的模型状态
-  const [selectedModel, setSelectedModel] = useState(null);
+  // 选中的模型引用
+  const selectedModelRef = useRef(null);
   // 场景中的模型列表
   const [sceneModels, setSceneModels] = useState([]);
+  // 变换状态
+  const [transformState, setTransformState] = useState({
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 }
+  });
 
   // 处理模型选中
   const handleModelSelect = (model) => {
+    // 如果选中的是同一个模型，不做任何处理
+    if (model === selectedModelRef.current) return;
+
     // 只允许选择实际的模型对象
     if (model && (model.type === 'Group' || (model.isMesh && !model.isHelper))) {
-      // console.log("看看-handleModelSelect", model)
-      // // 用 lodash 深拷贝 model
-      // const clonedModel = cloneDeep(model);
-      // setSelectedModel(clonedModel);
-      setSelectedModel(model);
+      selectedModelRef.current = model;
+      // 更新变换状态
+      requestAnimationFrame(() => {
+        setTransformState({
+          position: {
+            x: Number(model.position.x.toFixed(2)),
+            y: Number(model.position.y.toFixed(2)),
+            z: Number(model.position.z.toFixed(2))
+          },
+          rotation: {
+            x: Number((model.rotation.x * 180 / Math.PI).toFixed(2)),
+            y: Number((model.rotation.y * 180 / Math.PI).toFixed(2)),
+            z: Number((model.rotation.z * 180 / Math.PI).toFixed(2))
+          },
+          scale: {
+            x: Number(model.scale.x.toFixed(2)),
+            y: Number(model.scale.y.toFixed(2)),
+            z: Number(model.scale.z.toFixed(2))
+          }
+        });
+      });
     } else {
-      setSelectedModel(null);
+      selectedModelRef.current = null;
+      setTransformState({
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 }
+      });
     }
   };
 
   useEffect(() => {
-    console.log("看看-sceneModels--0000", selectedModel)
-  }, [selectedModel?.position])
+    console.log("看看-sceneModels--0000", selectedModelRef.current)
+  }, [selectedModelRef.current?.position])
 
   // 处理模型属性更新
   const handleModelUpdate = (type, value) => {
-    if (!selectedModel) return;
+    if (!selectedModelRef.current) return;
 
     // 更新模型属性
     switch(type) {
       case 'position':
-        selectedModel.position.set(value.x, value.y, value.z);
+        selectedModelRef.current.position.set(value.x, value.y, value.z);
         break;
       case 'rotation':
-        selectedModel.rotation.set(
+        selectedModelRef.current.rotation.set(
           value.x * Math.PI / 180,
           value.y * Math.PI / 180,
           value.z * Math.PI / 180
         );
         break;
       case 'scale':
-        selectedModel.scale.set(value.x, value.y, value.z);
+        selectedModelRef.current.scale.set(value.x, value.y, value.z);
         break;
       default:
         break;
     }
-    setSelectedModel(selectedModel);
+
+    // 更新变换状态
+    requestAnimationFrame(() => {
+      setTransformState(prev => ({
+        ...prev,
+        [type]: value
+      }));
+    });
+  };
+
+  // 同步 ThreeJS 的变换到状态
+  const handleTransformChange = () => {
+    if (!selectedModelRef.current) return;
+
+    // 使用 requestAnimationFrame 来优化性能
+    requestAnimationFrame(() => {
+      setTransformState({
+        position: {
+          x: Number(selectedModelRef.current.position.x.toFixed(2)),
+          y: Number(selectedModelRef.current.position.y.toFixed(2)),
+          z: Number(selectedModelRef.current.position.z.toFixed(2))
+        },
+        rotation: {
+          x: Number((selectedModelRef.current.rotation.x * 180 / Math.PI).toFixed(2)),
+          y: Number((selectedModelRef.current.rotation.y * 180 / Math.PI).toFixed(2)),
+          z: Number((selectedModelRef.current.rotation.z * 180 / Math.PI).toFixed(2))
+        },
+        scale: {
+          x: Number(selectedModelRef.current.scale.x.toFixed(2)),
+          y: Number(selectedModelRef.current.scale.y.toFixed(2)),
+          z: Number(selectedModelRef.current.scale.z.toFixed(2))
+        }
+      });
+    });
   };
 
   return (
@@ -61,7 +124,7 @@ const Editor3D = () => {
       <Sider width={250} theme="light">
         <SceneTree
           models={sceneModels}
-          selectedModel={selectedModel}
+          selectedModel={selectedModelRef.current}
           onSelect={handleModelSelect}
         />
       </Sider>
@@ -70,13 +133,16 @@ const Editor3D = () => {
           <ThreeJSScene
             onModelSelect={handleModelSelect}
             onModelsChange={setSceneModels}
-            selectedModel={selectedModel}
+            selectedModel={selectedModelRef.current}
+            transformState={transformState}
+            onTransformChange={handleTransformChange}
           />
         </ErrorBoundary>
       </Content>
       <Sider width={300} theme="light">
         <PropertyPanel
-          selectedModel={selectedModel}
+          selectedModel={selectedModelRef.current}
+          transformState={transformState}
           onModelUpdate={handleModelUpdate}
         />
       </Sider>
