@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { Upload, Button, message } from 'antd';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls';
+import { Upload, Button, message, Radio } from 'antd';
 import { UploadOutlined, SaveOutlined, ImportOutlined } from '@ant-design/icons';
-import { DragControls } from 'three/examples/jsm/controls/DragControls';
 
 // 服务器配置
 const SERVER_URL = 'http://localhost:921';
@@ -84,11 +84,11 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
   const cameraRef = useRef(null);
   const rendererRef = useRef(null);
   const controlsRef = useRef(null);
+  const transformControlsRef = useRef(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   const modelsRef = useRef([]);
-  const dragControlsRef = useRef(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [transformMode, setTransformMode] = useState('translate'); // 'translate', 'rotate', 'scale'
 
   // 初始化场景
   useEffect(() => {
@@ -174,47 +174,24 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // 创建拖拽控制器
-    const dragControls = new DragControls([], camera, renderer.domElement);
-    dragControlsRef.current = dragControls;
+    // 创建变换控制器
+    const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.addEventListener('dragging-changed', (event) => {
+      // 当正在变换时，禁用轨道控制器，防止冲突
+      controls.enabled = !event.value;
+    });
 
-    // 开始拖拽时
-    dragControls.addEventListener('dragstart', (event) => {
-      setIsDragging(true);
-      // 禁用轨道控制器
-      if (controlsRef.current) {
-        controlsRef.current.enabled = false;
+    // 监听变换事件
+    transformControls.addEventListener('objectChange', () => {
+      if (transformControls.object && onModelSelect) {
+        // 通知属性面板更新
+        onModelSelect(transformControls.object);
       }
     });
 
-    // 拖拽过程中
-    dragControls.addEventListener('drag', (event) => {
-      // 限制Y轴移动（可选，如果需要限制在地平面上移动）
-      // event.object.position.y = event.object.userData.initialY || 0;
-
-      // 通知位置更新
-      if (onModelSelect && event.object) {
-        // 更新选中对象的位置
-        const updatedObject = event.object;
-        // 强制更新选中状态，触发属性面板更新
-        // onModelSelect(null);  // 先取消选中
-        onModelSelect(updatedObject);  // 再重新选中
-        // console.log("看看-updatedObject", updatedObject)
-      }
-    });
-
-    // 结束拖拽时
-    dragControls.addEventListener('dragend', (event) => {
-      setIsDragging(false);
-      // 恢复轨道控制器
-      if (controlsRef.current) {
-        controlsRef.current.enabled = true;
-      }
-      // 确保最后一次更新
-      if (onModelSelect && event.object) {
-        onModelSelect(event.object);
-      }
-    });
+    // 添加到场景 - 修改这里
+    scene.add(transformControls.getHelper());
+    transformControlsRef.current = transformControls;
 
     // 处理窗口大小变化
     const handleResize = () => {
@@ -233,41 +210,21 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     // 监听窗口大小变化
     window.addEventListener('resize', handleResize);
 
-    // 处理模型选中
-    const handleModelSelect = (event) => {
-      if (isDragging) return; // 如果正在拖拽，不处理选中
+    // 添加相机控制器的限制
+    if (controls) {
+      // 限制相机距离
+      controls.minDistance = 5;
+      controls.maxDistance = 100;
 
-      // 获取容器矩形
-      const rect = containerRef.current.getBoundingClientRect();
-      // 计算鼠标位置
-      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      // 限制垂直旋转角度
+      controls.minPolarAngle = 0.1; // 接近但不等于0，防止相机到达正上方
+      controls.maxPolarAngle = Math.PI * 0.85; // 略小于 PI，防止相机到达正下方
 
-      // 从相机创建射线
-      raycasterRef.current.setFromCamera(mouseRef.current, camera);
-      // 获取场景中所有网格对象
-      const objects = [];
-      scene.traverse((object) => {
-        // 如果对象是网格对象，则添加到对象列表中
-        if (object.isMesh) {
-          objects.push(object);
-        }
-      });
+      // 平滑控制
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+    }
 
-      // 获取射线与场景中所有网格对象的交点
-      const intersects = raycasterRef.current.intersectObjects(objects);
-
-      // 如果交点存在，则选中第一个交点对应的网格对象
-      if (intersects.length > 0) {
-        // 获取交点对应的网格对象
-        const selectedObject = intersects[0].object;
-        // 调用 onModelSelect 回调函数，传递选中对象
-        onModelSelect(selectedObject);
-      } else {
-        // 如果没有交点，则取消选中
-        onModelSelect(null);
-      }
-    };
     // 监听渲染器DOM元素的点击事件
     renderer.domElement.addEventListener('click', handleModelSelect);
 
@@ -325,25 +282,64 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
       // 释放资源
       renderer.dispose();
       controls.dispose();
+      if (transformControls) {
+        transformControls.dispose();
+      }
     };
   }, [onModelSelect]);
 
   // 监听选中模型变化
   useEffect(() => {
-    if (!dragControlsRef.current) return;
+    if (!transformControlsRef.current || !sceneRef.current) return;
 
     if (selectedModel) {
-      // 更新可拖拽对象
-      dragControlsRef.current.setObjects([selectedModel]);
-    } else {
-      // 清空可拖拽对象
-      dragControlsRef.current.setObjects([]);
-      // 确保轨道控制器被启用
-      if (controlsRef.current) {
-        controlsRef.current.enabled = true;
+      // 确保 transformControls 已经被正确添加到场景中
+      const helper = transformControlsRef.current.getHelper();
+      if (!sceneRef.current.children.includes(helper)) {
+        sceneRef.current.add(helper);
       }
+      transformControlsRef.current.attach(selectedModel);
+    } else {
+      transformControlsRef.current.detach();
     }
   }, [selectedModel]);
+
+  // 监听变换模式变化
+  useEffect(() => {
+    if (transformControlsRef.current) {
+      transformControlsRef.current.setMode(transformMode);
+    }
+  }, [transformMode]);
+
+  // 处理模型选中
+  const handleModelSelect = (event) => {
+    // 获取容器矩形
+    const rect = containerRef.current.getBoundingClientRect();
+    // 计算鼠标位置
+    mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // 从相机创建射线
+    raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+    // 获取场景中所有网格对象
+    const objects = [];
+    sceneRef.current.traverse((object) => {
+      if (object.isMesh && !object.isHelper) {
+        objects.push(object);
+      }
+    });
+
+    // 获取射线与场景中所有网格对象的交点
+    const intersects = raycasterRef.current.intersectObjects(objects);
+
+    // 如果交点存在，则选中第一个交点对应的网格对象
+    if (intersects.length > 0) {
+      const selectedObject = intersects[0].object;
+      onModelSelect(selectedObject);
+    } else {
+      onModelSelect(null);
+    }
+  };
 
   // 导出场景为JSON
   const exportSceneToJSON = () => {
@@ -525,23 +521,6 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
     }
   };
 
-  // 添加相机控制器的限制
-  useEffect(() => {
-    if (controlsRef.current) {
-      // 限制相机距离
-      controlsRef.current.minDistance = 5;
-      controlsRef.current.maxDistance = 100;
-
-      // 限制垂直旋转角度
-      controlsRef.current.minPolarAngle = 0.1; // 接近但不等于0，防止相机到达正上方
-      controlsRef.current.maxPolarAngle = Math.PI * 0.85; // 略小于 PI，防止相机到达正下方
-
-      // 平滑控制
-      controlsRef.current.enableDamping = true;
-      controlsRef.current.dampingFactor = 0.05;
-    }
-  }, []);
-
   // 修改导入场景方法
   const importSceneFromJSON = async (event) => {
     const file = event.target.files[0];
@@ -690,56 +669,53 @@ const ThreeJSScene = ({ onModelSelect, onModelsChange, selectedModel }) => {
         left: 10,
         zIndex: 1000,
         display: 'flex',
-        gap: '10px'
+        gap: '10px',
+        flexDirection: 'column'
       }}>
-        <Upload
-          accept=".obj"
-          showUploadList={false}
-          beforeUpload={(file) => {
-            handleFileUpload({ target: { files: [file] } });
-            return false;
-          }}
-        >
-          <Button icon={<UploadOutlined />}>
-            导入模型
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <Upload
+            accept=".obj"
+            showUploadList={false}
+            beforeUpload={(file) => {
+              handleFileUpload({ target: { files: [file] } });
+              return false;
+            }}
+          >
+            <Button icon={<UploadOutlined />}>
+              导入模型
+            </Button>
+          </Upload>
+          <Button
+            icon={<SaveOutlined />}
+            onClick={exportSceneToJSON}
+          >
+            导出场景
           </Button>
-        </Upload>
-        <Button
-          icon={<SaveOutlined />}
-          onClick={exportSceneToJSON}
-        >
-          导出场景
-        </Button>
-        <Upload
-          accept=".json"
-          showUploadList={false}
-          beforeUpload={(file) => {
-            importSceneFromJSON({ target: { files: [file] } });
-            return false;
-          }}
-        >
-          <Button icon={<ImportOutlined />}>
-            导入场景
-          </Button>
-        </Upload>
-      </div>
-      {/* 添加拖拽提示 */}
-      {selectedModel && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 10,
-            padding: '8px 12px',
-            background: 'rgba(0,0,0,0.6)',
-            color: 'white',
-            borderRadius: '4px',
-            zIndex: 1000
-          }}
-        >
-          {isDragging ? '正在拖拽模型...' : '长按模型可拖拽'}
+          <Upload
+            accept=".json"
+            showUploadList={false}
+            beforeUpload={(file) => {
+              importSceneFromJSON({ target: { files: [file] } });
+              return false;
+            }}
+          >
+            <Button icon={<ImportOutlined />}>
+              导入场景
+            </Button>
+          </Upload>
         </div>
-      )}
+        {selectedModel && (
+          <Radio.Group
+            value={transformMode}
+            onChange={(e) => setTransformMode(e.target.value)}
+            buttonStyle="solid"
+          >
+            <Radio.Button value="translate">移动</Radio.Button>
+            <Radio.Button value="rotate">旋转</Radio.Button>
+            <Radio.Button value="scale">缩放</Radio.Button>
+          </Radio.Group>
+        )}
+      </div>
     </div>
   );
 };
