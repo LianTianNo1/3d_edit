@@ -17,6 +17,7 @@ const SceneTree = ({ models, selectedModel, onSelect }) => {
     icon: <AppstoreOutlined />, // 添加图标
     model: model
   }));
+  console.log('看看-treeData', models)
 
   return (
     <div style={{ padding: '16px' }}>
